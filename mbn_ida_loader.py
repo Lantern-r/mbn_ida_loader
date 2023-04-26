@@ -19,10 +19,9 @@ def dwordAt(li, off):
 
 
 # -----------------------------------------------------------------------
-def accept_file(li, n):
+def accept_file(li, filename):
 
-    # we support only one format per file
-    if n > 0:
+    if type(filename) != str:
         return 0
 
     # Pray nothing else has these first 8 bytes
@@ -49,7 +48,7 @@ def load_file(li, neflags, format):
         Warning("Unknown format name: '%s'" % format)
         return 0
 
-    idaapi.set_processor_type("arm:ARMv7-A&R", SETPROC_ALL|SETPROC_FATAL)
+    idaapi.set_processor_type("arm:ARMv7-A&R", SETPROC_LOADER_NON_FATAL|SETPROC_LOADER)
 
     if format == SBLImageFormatName:
         return load_file_sbl(li)
@@ -92,35 +91,35 @@ def find_aboot_segs(image_dest):
     search_start = reset_func
     search_end = search_start + 0x100
 
-    data_insts = FindBinary(search_start, SEARCH_DOWN, "4C 00 ?? ?? 4C 10 ?? ?? 4C 20 ?? ??")
+    data_insts = find_binary(search_start, SEARCH_DOWN, "4C 00 ?? ?? 4C 10 ?? ?? 4C 20 ?? ??")
     if data_insts == BADADDR or data_insts > search_end:
         return False
 
-    data_start = Dword(DecodeInstruction(data_insts + 4).Op2.addr)
-    data_end = Dword(DecodeInstruction(data_insts + 8).Op2.addr)
+    data_start = get_wide_dword(DecodeInstruction(data_insts + 4).Op2.addr)
+    data_end = get_wide_dword(DecodeInstruction(data_insts + 8).Op2.addr)
     data_end = (data_end + 3) & ~3
 
     AddSeg(data_start, data_end, 0, 1, idaapi.saRelPara, idaapi.scPub)
-    SetSegClass(data_start, "DATA")
-    RenameSeg(data_start, "DATA")
+    set_segm_class(data_start, "DATA")
+    set_segm_name(data_start, "DATA")
 
-    bss_insts = FindBinary(data_insts, SEARCH_DOWN, "34 00 ?? ?? 34 10 ?? ??")
+    bss_insts = find_binary(data_insts, SEARCH_DOWN, "34 00 ?? ?? 34 10 ?? ??")
     if bss_insts == BADADDR or bss_insts > search_end:
         return False
 
-    bss_start = Dword(DecodeInstruction(bss_insts + 0).Op2.addr)
-    bss_end = Dword(DecodeInstruction(bss_insts + 4).Op2.addr)
+    bss_start = get_wide_dword(DecodeInstruction(bss_insts + 0).Op2.addr)
+    bss_end = get_wide_dword(DecodeInstruction(bss_insts + 4).Op2.addr)
 
     AddSeg(bss_start, bss_end, 0, 1, idaapi.saRelPara, idaapi.scPub)
-    SetSegClass(bss_start, "BSS")
-    RenameSeg(bss_start, "BSS")
+    set_segm_class(bss_start, "BSS")
+    set_segm_name(bss_start, "BSS")
 
-    kmain_addr = FindBinary(bss_insts, SEARCH_DOWN, "?? ?? 00 FA")
+    kmain_addr = find_binary(bss_insts, SEARCH_DOWN, "?? ?? 00 FA")
     if kmain_addr == BADADDR or kmain_addr > search_end:
         return False
 
     kmain_addr = DecodeInstruction(kmain_addr).Op1.addr
-    MakeName(kmain_addr, "kmain")
+    set_name(kmain_addr, "kmain", SN_CHECK)
     idaapi.add_entry(kmain_addr, kmain_addr, "kmain", 1)
     return True
 
@@ -129,13 +128,13 @@ def find_sbl_segs_regex(load_addr, load_end):
 
     pat = "?? ?? ?? %02x ?? ?? ?? %02x ?? ?? 00 00 ?? ?? ?? %02x ?? ?? ?? 00" % (load_byte,load_byte,load_byte)
 
-    addr = FindBinary(load_end, SEARCH_UP, pat)
+    addr = find_binary(load_end, SEARCH_UP, pat)
     while addr != BADADDR:
-        img_load_addr = Dword(addr+0)
-        img_data_base = Dword(addr+4)
-        img_data_len = Dword(addr+8)
-        img_bss_base = Dword(addr+12)
-        img_bss_len = Dword(addr+16)
+        img_load_addr = get_wide_dword(addr+0)
+        img_data_base = get_wide_dword(addr+4)
+        img_data_len = get_wide_dword(addr+8)
+        img_bss_base = get_wide_dword(addr+12)
+        img_bss_len = get_wide_dword(addr+16)
 
         if img_load_addr >= load_addr and \
             img_data_base >= load_addr and \
@@ -144,32 +143,32 @@ def find_sbl_segs_regex(load_addr, load_end):
             img_data_base + img_data_len == img_bss_base:
             
             AddSeg(img_data_base, img_data_base+img_data_len, 0, 1, idaapi.saRelPara, idaapi.scPub)
-            SetSegClass(img_data_base, "DATA")
-            RenameSeg(img_data_base, "DATA")
+            set_segm_class(img_data_base, "DATA")
+            set_segm_name(img_data_base, "DATA")
 
             AddSeg(img_bss_base, img_bss_base+img_bss_len, 0, 1, idaapi.saRelPara, idaapi.scPub)
-            SetSegClass(img_bss_base, "BSS")
-            RenameSeg(img_bss_base, "BSS")
+            set_segm_class(img_bss_base, "BSS")
+            set_segm_name(img_bss_base, "BSS")
             return True
             
         # Don't want to skip anything, so move back up 16 bytes (pattern is 20 bytes)
-        addr = FindBinary(addr + 16, SEARCH_UP, pat)
+        addr = find_binary(addr + 16, SEARCH_UP, pat)
 
     return False
 
 def find_sbl_segs(load_addr, load_end):
-    print "Trying to find SBL segments"
+    print("Trying to find SBL segments")
 
     if find_sbl_segs_regex(load_addr, load_end):
         return True
 
-    print "Find by regex failed, brute-forcing..."
+    print("Find by regex failed, brute-forcing...")
     def brute_force(addr):
-        img_load_addr = Dword(addr+0)
-        img_data_base = Dword(addr+4)
-        img_data_len = Dword(addr+8)
-        img_bss_base = Dword(addr+12)
-        img_bss_len = Dword(addr+16)
+        img_load_addr = get_wide_dword(addr+0)
+        img_data_base = get_wide_dword(addr+4)
+        img_data_len = get_wide_dword(addr+8)
+        img_bss_base = get_wide_dword(addr+12)
+        img_bss_len = get_wide_dword(addr+16)
         
         if img_load_addr < load_addr or img_data_base < load_addr or img_load_addr > load_end:
             return False
@@ -180,17 +179,17 @@ def find_sbl_segs(load_addr, load_end):
         if img_data_base + img_data_len != img_bss_base:
             return False
 
-        print "Load %X" % (img_load_addr)
-        print "RW (%X - %X)" % (img_data_base, img_data_base + img_data_len)
-        print "ZI (%X - %X)" % (img_bss_base, img_bss_base + img_bss_len)
+        print("Load %X" % (img_load_addr))
+        print("RW (%X - %X)" % (img_data_base, img_data_base + img_data_len))
+        print("ZI (%X - %X)" % (img_bss_base, img_bss_base + img_bss_len))
         
         AddSeg(img_data_base, img_data_base+img_data_len, 0, 1, idaapi.saRelPara, idaapi.scPub)
-        SetSegClass(img_data_base, "DATA")
-        RenameSeg(img_data_base, "DATA")
+        set_segm_class(img_data_base, "DATA")
+        set_segm_name(img_data_base, "DATA")
 
         AddSeg(img_bss_base, img_bss_base+img_bss_len, 0, 1, idaapi.saRelPara, idaapi.scPub)
-        SetSegClass(img_bss_base, "BSS")
-        RenameSeg(img_bss_base, "BSS")
+        set_segm_class(img_bss_base, "BSS")
+        set_segm_name(img_bss_base, "BSS")
 
         return True
 
@@ -244,8 +243,8 @@ def load_segment(li, file_ofs, code_size, load_addr, seg_name = "CODE", seg_clas
     load_end = load_addr + code_size
 
     AddSeg(load_addr, load_end, 0, 1, idaapi.saRelPara, idaapi.scPub)
-    SetSegClass(load_addr, seg_class)
-    RenameSeg(load_addr, seg_name)
+    set_segm_class(load_addr, seg_class)
+    set_segm_name(load_addr, seg_name)
 
     # copy bytes to the database
     li.file2base(file_ofs, load_addr, load_end, 0)
@@ -259,4 +258,3 @@ def load_segment(li, file_ofs, code_size, load_addr, seg_name = "CODE", seg_clas
 def move_segm(frm, to, sz, fileformatname):
     Warning("move_segm(from=%s, to=%s, sz=%d, formatname=%s" % (hex(frm), hex(to), sz, fileformatname))
     return 0
-
